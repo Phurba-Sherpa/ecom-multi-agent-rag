@@ -277,10 +277,10 @@ def build_inventory_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel using the WORKER model
-    pass
+    model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.1)
 
     # TODO: System prompt for the Inventory Agent
-    pass
+    system_prompt = """ """
 
     # TODO: Implement check_order_status tool
     pass
@@ -298,7 +298,12 @@ def build_inventory_agent() -> Agent:
         Returns:
             Customer profile including tier and account details
         """
-        pass
+        table = dynamodb.Table(config.CUSTOMERS_TABLE)
+        resp = table.get_item(Key={"customer_id": customer_id})
+        customer_profile = resp.get("Item")
+        if not customer_profile:
+            return {"error": f"Customer {customer_id} doesn't exists"}
+        return customer_profile
 
     # TODO: Implement list_customer_orders
     @tool
