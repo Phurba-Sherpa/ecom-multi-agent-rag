@@ -277,13 +277,30 @@ def build_inventory_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel using the WORKER model
-    pass
+    model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.1)
 
     # TODO: System prompt for the Inventory Agent
-    pass
+    system_prompt = """ You are an Inventory Agent of a NovaMart.
+                        Your job is to answer inventory details such as:
+                        - order status
+                        - customer tier
+                        - list customer orders
+
+                        For answering such inventory relation information you have been provided with tools:
+                        - check_order_status call with 'order_id' and 'customer_id'
+                        - get_customer_tier call with 'customer_id'
+                        - list_customer_orders call with 'customer_id'
+                        """
 
     # TODO: Implement check_order_status tool
-    pass
+    @tool
+    def check_order_status(order_id: str, customer_id: str) -> dict:
+        table = dynamodb.Table(config.ORDERS_TABLE)
+        resp = table.get_item(Key={"order_id": order_id, "customer_id": customer_id})
+        order = resp.get("Item")
+        if not order: 
+            return {"error": f"Order details not found for {order_id}"}
+        return { "order_id": order.order_id, "status": order.status}
 
     # TODO: Implement get_customer_tier
     @tool
@@ -298,7 +315,12 @@ def build_inventory_agent() -> Agent:
         Returns:
             Customer profile including tier and account details
         """
-        pass
+        table = dynamodb.Table(config.CUSTOMERS_TABLE)
+        resp = table.get_item(Key={"customer_id": customer_id})
+        customer_profile = resp.get("Item")
+        if not customer_profile:
+            return {"error": f"Customer {customer_id} doesn't exists"}
+        return customer_profile
 
     # TODO: Implement list_customer_orders
     @tool
@@ -312,11 +334,17 @@ def build_inventory_agent() -> Agent:
         Returns:
             List of all orders with order_id, status, order_date, and amount
         """
-        pass
+        table = dynamodb.Table(config.ORDERS_TABLE)
+        resp = table.query(
+                KeyConditionExpression=Key("customer_id").eq(customer_id)
+                )
+
+        orders = resp.get("Items", [])
+        return { "orders": { "order_id": order.order_id, "amount": order.price, "status": order.status, "order_date": order.order_date} 
+                for order in orders if order}
 
     # TODO: Instantiate and return the Agent
-    pass
-
+    return Agent(model=model, system_prompt=system_prompt, tools=[list_customer_orders, check_order_status, get_customer_tier])
 
 # ───────────────────────────────────────────────────────
 #  2.B - REFUND AGENT
