@@ -290,6 +290,8 @@ def build_inventory_agent() -> Agent:
                         - check_order_status call with 'order_id' and 'customer_id'
                         - get_customer_tier call with 'customer_id'
                         - list_customer_orders call with 'customer_id'
+
+                        Do not add extra commentary
                         """
 
     # TODO: Implement check_order_status tool
@@ -300,7 +302,7 @@ def build_inventory_agent() -> Agent:
         order = resp.get("Item")
         if not order: 
             return {"error": f"Order details not found for {order_id}"}
-        return { "order_id": order.order_id, "status": order.status}
+        return order
 
     # TODO: Implement get_customer_tier
     @tool
@@ -359,10 +361,19 @@ def build_refund_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel
-    pass
+    model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.1)
 
     # TODO: System prompt for the Refund Agent
-    pass
+    system_prompt = """ You are an refund Agent of a NovaMart.
+                        Your job is to make return/refund eligibility decisions based on order facts and apply correct policy
+                        window per customer tier.
+
+                        For answering making such decision you have been provided with tools:
+                        - get_inventory_context call with 'session_id' - Access the facts gathered by InventoryAgent
+                        - initiate_refund call with 'customer_id', 'order_id', 'reason' - To initiate refund
+
+                        Do not add extra commentary
+                        """
 
     # TODO: Implement get_inventory_context
     @tool
@@ -376,7 +387,11 @@ def build_refund_agent() -> Agent:
         Returns:
             The inventory_agent field from WorkflowState, or empty dict if not yet set
         """
-        pass
+        table = dynamodb.Table(config.WORKFLOW_STATE_TABLE)
+        resp = table.query(Key={"session_id": session_id})
+        ws = resp.get("Item", {}).get("inventory_agent", {})
+        return ws
+
 
     # TODO: Implement initiate_refund
     @tool
@@ -392,10 +407,18 @@ def build_refund_agent() -> Agent:
         Returns:
             Confirmation dict with return_reference number and instructions
         """
-        pass
+        table = dynamodb.Table(config.ORDERS_TABLE)
+        return_ref_no = f"RETURN-PRD-{customer_id}-{order_id}"
+        table.update_item(Key={"order_id": order_id, "customer_id": customer_id},
+                          UpdateExpression="SET status = :status, reason = :reason, return_ref_no = :return_ref_no"),
+        ExpressionAttributeValues={":status": 'return_requested', ":reason": reason, ":return_ref_no": return_ref_no}
+        resp = table.get_item(Key={"customer_id": customer_id, "order_id": order_id})
+
+        return resp.get("Item", {})
+                          
 
     # TODO: Instantiate and return the Agent
-    pass
+    return Agent(model=model, system_prompt=system_prompt, tools=[initiate_refund, get_inventory_context])
 
 
 # ───────────────────────────────────────────────────────
