@@ -34,6 +34,7 @@ ORCHESTRATOR_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Worker agents: Claude 3 Sonnet - more capable for reasoning and generation
 WORKER_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+TOP_K = 5
 
 # ─────────────────────────────────────────────
 # CLOUDFORMATION EXPORTS LOADER

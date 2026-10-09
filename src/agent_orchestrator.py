@@ -85,6 +85,7 @@ agentcore_client     = boto3.client('bedrock-agentcore', region_name=config.AWS_
 agentcore_control    = boto3.client('bedrock-agentcore-control', region_name=config.AWS_REGION)
 dynamodb             = boto3.resource('dynamodb', region_name=config.AWS_REGION)
 logs_client          = boto3.client('logs', region_name=config.AWS_REGION)
+bedrock_agent_runtime = boto3.client("bedrock-agent-runtime", region_name=config.AWS_REGION)
 
 
 # ─────────────────────────────────────────────────────
@@ -258,6 +259,43 @@ def _update_workflow_state(session_id: str, updates: dict,
 
     raise RuntimeError("WorkflowState update: unexpected exit from retry loop")
 
+
+def retrieve_from_kb(kb_id: str, query: str, kb_name: str, top_k: int = 5 ) -> list[dict]:
+    if not kb_id:
+        raise RuntimeError(
+                f"{kb_name} Knowledge Base ID is not set. "
+                f"Create the Bedrock Knowledge Base per the Setup section of "
+                f"lesson-08-implementing-multi-agent-rag/README.md, then set "
+                f"RETURNS_KB_ID / SHIPPING_KB_ID / WARRANTY_KB_ID in your .env file before re-running."
+                )
+    response = bedrock_agent_runtime.retrieve(
+        knowledgeBaseId=kb_id,
+        retrievalQuery={"text": query},          # natural language query
+        retrievalConfiguration={
+            "vectorSearchConfiguration": {
+                "numberOfResults": top_k,         # how many chunks to return
+            }
+        },
+    )
+
+     # PARSE: extract content, score, and S3 source URI from each result
+    results = []
+    for i, result in enumerate(response.get("retrievalResults", [])):
+        content = result.get("content", {}).get("text", "")
+        score = result.get("score", 0.0)
+        location = result.get("location", {})
+        uri = location.get("s3Location", {}).get("uri", "") if location.get("type") == "S3" else ""
+
+        results.append({
+            "doc_id": f"{kb_name}-{i+1}",
+            "title": uri.split("/")[-1] if uri else f"Result {i+1}",
+            "source": uri or kb_name,
+            "content": content,
+            "score": score,
+            "kb": kb_name,
+        })
+
+    return results
 
 # ═══════════════════════════════════════════════════════
 #  TASK 2 - MULTI-AGENT ORCHESTRATION
@@ -438,28 +476,75 @@ def build_policy_agent() -> Agent:
     @tool
     def retrieve_returns_policy(query: str) -> str:
         """Retrieve relevant passages from the Returns Policy knowledge base."""
-        pass
+        passages = retrieve_from_kb(config.RETURNS_KB_ID, query, "Return Policy Papers", config.TOP_K)
+        return json.dumps({
+            "kb": "Return Policy Papers",
+            "query": query,
+            "passage_found": len(passages),
+            "results": [
+                {"doc_id": p.get("doc_id"), "title": p.get("title"), "score": p.get("score")}
+                for p in passages
+                ]
+            }, indent=2)
 
     # Create the ReturnsPolicyRetrieverAgent with the tool above
-    pass
+    def build_return_policy_retriever() -> Agent:
+        model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.2)
+        system_prompt = """You are a Refund policy paper retrieval agent. Your ONLY job:
+        1. Call retrive_returns_policy with the query
+        2. Report how many passages were found and their relevance scores
+        Do NOT add any other commentary."""
+        return Agent(model=model, system_prompt=system_prompt, tools=[retrieve_returns_policy])
 
     # TODO: Build ShippingPolicyRetrieverAgent
     @tool
     def retrieve_shipping_policy(query: str) -> str:
         """Retrieve relevant passages from the Shipping Policy knowledge base."""
-        pass
+        passages = retrieve_from_kb(config.SHIPPING_KB_ID, query, "Shipping Policy Papers", config.TOP_K)
+        return json.dumps({
+            "kb": "Shipping Policy Papers",
+            "query": query,
+            "passage_found": len(passages),
+            "results": [
+                {"doc_id": p.get("doc_id"), "title": p.get("title"), "score": p.get("score")}
+                for p in passages
+                ]
+            }, indent=2)
+
+    def build_shipping_policy_retriever() -> Agent:
+        model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.2)
+        system_prompt = """You are a Shipping policy paper retrieval agent. Your ONLY job:
+        1. Call retrive_shipping_policy with the query
+        2. Report how many passages were found and their relevance scores
+        Do NOT add any other commentary. """
+        return Agent(model=model, system_prompt=system_prompt, tools=[retrieve_shipping_policy])
+
 
     # Create the ShippingPolicyRetrieverAgent with the tool above
-    pass
 
     # TODO: Build WarrantyPolicyRetrieverAgent
     @tool
     def retrieve_warranty_policy(query: str) -> str:
         """Retrieve relevant passages from the Warranty Policy knowledge base."""
-        pass
+        passages = retrieve_from_kb(config.SHIPPING_KB_ID, query, "Warranty Policy Papers", config.TOP_K)
+        return json.dumps({
+            "kb": "Warranty Policy Papers",
+            "query": query,
+            "passage_found": len(passages),
+            "results": [
+                {"doc_id": p.get("doc_id"), "title": p.get("title"), "score": p.get("score")}
+                for p in passages
+                ]
+            }, indent=2)
 
     # Create the WarrantyPolicyRetrieverAgent with the tool above
-    pass
+    def build_warranty_policy_retriever() -> Agent:
+        model = BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.2)
+        system_prompt = """You are a Warranty policy paper retrieval agent. Your ONLY job:
+        1. Call retrive_warranty_policy with the query
+        2. Report how many passages were found and their relevance scores
+        Do NOT add any other commentary. """
+        return Agent(model=model, system_prompt=system_prompt, tools=[retrieve_warranty_policy])
 
     # TODO: Implement search_all_policies - parallel RAG retrieval tool
     @tool
@@ -478,6 +563,12 @@ def build_policy_agent() -> Agent:
         """
         # Build a dict mapping domain names to their retriever agents
         # e.g. {'Returns': returns_retriever, 'Shipping': shipping_retriever, ...}
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {
+                        executor.submit(): "return",
+                        executor.submit(): "shipping",
+                        executor.submit(): "warranty"
+                        }
 
         # ── Trace: show parallel KB dispatch to learners ──────────────────
         trace.kb_start({
